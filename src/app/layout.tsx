@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Task Manager',
-  description: 'Project, milestone, deadline, and finance tracker',
+  title: 'uiuxmart',
+  description: 'Workspace project, milestone, deadline, invoice, and finance tracker',
 }
 
 export default function RootLayout({

@@ -10,9 +10,9 @@ type ModalProps = {
 
 export function Modal({ title, description, children, onClose, maxWidth = 'max-w-lg' }: ModalProps) {
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 px-4 py-4 backdrop-blur-sm sm:items-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/45 px-4 py-4 backdrop-blur-sm sm:items-center">
       <div
-        className={`flex max-h-[calc(100vh-2rem)] w-full ${maxWidth} flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl`}
+        className={`flex max-h-[calc(100vh-2rem)] w-full ${maxWidth} flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/20`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>

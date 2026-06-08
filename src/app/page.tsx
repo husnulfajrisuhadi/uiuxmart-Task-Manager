@@ -12,13 +12,14 @@ import {
   type Milestone,
   type MilestoneTask,
   type Payment,
-  type PriorityFilter,
   type Project,
-  type ProjectPriority,
+  type ProjectAssignment,
   type ProjectType,
   type ProjectTypeFilter,
   type SortOption,
   type StatusFilter,
+  assignmentDealTotal,
+  assignmentExternalFeeTotal,
   deadlineState,
   formatCompactRupiah,
   formatDateTime,
@@ -28,13 +29,12 @@ import {
   isProjectOwner,
   progressValue,
   projectFinancials,
-  projectPriorityClass,
-  projectPriorityLabel,
-  projectPriorityOptions,
-  projectPriorityRank,
+  projectAssignmentLabel,
+  projectAssignmentsForProject,
   projectTypeClass,
   projectTypeLabel,
   projectTypeOptions,
+  projectTypeValues,
   statusClass,
   statusLabel,
   statusOptions,
@@ -71,6 +71,15 @@ type RevenuePoint = {
   color: string
 }
 
+type AssignmentFormRow = {
+  id?: string
+  projectType: ProjectType
+  roleLabel: string
+  assignedTo: string
+  dealAmount: string
+  internalFee: string
+}
+
 type DashboardNotification = {
   id: string
   projectId: string
@@ -78,6 +87,14 @@ type DashboardNotification = {
   detail: string
   deadline?: string | null
   tone: 'danger' | 'warning' | 'info'
+}
+
+type CalendarDeadlineType = 'project' | 'milestone' | 'scope'
+
+type CalendarDeadlineGroup = {
+  projectId: string
+  title: string
+  types: CalendarDeadlineType[]
 }
 
 function paymentTotal(payments: Payment[], type: Payment['type']) {
@@ -124,6 +141,16 @@ function shouldNotifyDeadline(deadline?: string | null) {
   return new Date(deadline).getTime() <= Date.now() + 7 * 24 * 60 * 60 * 1000
 }
 
+function defaultAssignmentRow(projectType: ProjectType, userId: string): AssignmentFormRow {
+  return {
+    projectType,
+    roleLabel: projectTypeLabel(projectType),
+    assignedTo: userId,
+    dealAmount: '',
+    internalFee: '',
+  }
+}
+
 export default function Home() {
   const router = useRouter()
 
@@ -132,6 +159,7 @@ export default function Home() {
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [milestoneTasks, setMilestoneTasks] = useState<MilestoneTask[]>([])
   const [changeRequests, setChangeRequests] = useState<ChangeRequest[]>([])
+  const [projectAssignments, setProjectAssignments] = useState<ProjectAssignment[]>([])
   const [users, setUsers] = useState<AppUser[]>([])
   const [currentUserId, setCurrentUserId] = useState('')
   const [currentUserEmail, setCurrentUserEmail] = useState('')
@@ -142,12 +170,13 @@ export default function Home() {
 
   const [name, setName] = useState('')
   const [client, setClient] = useState('')
-  const [projectType, setProjectType] = useState<ProjectType>('web_app')
-  const [priority, setPriority] = useState<ProjectPriority>('medium')
+  const [projectTypes, setProjectTypes] = useState<ProjectType[]>(['web_app'])
   const [deadline, setDeadline] = useState('')
   const [deal, setDeal] = useState('')
-  const [internalCost, setInternalCost] = useState('')
+  const [downPayment, setDownPayment] = useState('')
+  const [downPaymentDate, setDownPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
   const [assignedTo, setAssignedTo] = useState('')
+  const [assignmentRows, setAssignmentRows] = useState<AssignmentFormRow[]>([])
   const [formError, setFormError] = useState('')
   const [savingProject, setSavingProject] = useState(false)
   const [deletingProjectId, setDeletingProjectId] = useState('')
@@ -164,7 +193,6 @@ export default function Home() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [typeFilter, setTypeFilter] = useState<ProjectTypeFilter>('all')
-  const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all')
   const [sortBy, setSortBy] = useState<SortOption>('newest')
 
   useEffect(() => {
@@ -229,9 +257,11 @@ export default function Home() {
     let milestoneRows: Milestone[] = []
     let taskRows: MilestoneTask[] = []
     let changeRequestRows: ChangeRequest[] = []
+    let assignmentRowsData: ProjectAssignment[] = []
 
     if (projectIds.length > 0) {
-      const [paymentsResult, milestonesResult, changeRequestsResult] = await Promise.all([
+      const [paymentsResult, milestonesResult, changeRequestsResult, assignmentsResult] =
+        await Promise.all([
         supabase
           .from('payments')
           .select('*')
@@ -248,16 +278,37 @@ export default function Home() {
           .select('*')
           .in('project_id', projectIds)
           .order('created_at', { ascending: false }),
+        supabase
+          .from('project_assignments')
+          .select('*')
+          .in('project_id', projectIds)
+          .order('sort_order', { ascending: true }),
       ])
 
       if (paymentsResult.error) throw paymentsResult.error
       if (milestonesResult.error) throw milestonesResult.error
       if (changeRequestsResult.error) throw changeRequestsResult.error
+      if (assignmentsResult.error) throw assignmentsResult.error
+
+      assignmentRowsData = (assignmentsResult.data as ProjectAssignment[] | null) || []
 
       const rawPayments = (paymentsResult.data as Payment[] | null) || []
       paymentRows = rawPayments.filter((payment) => {
         const project = projectRows.find((item) => item.id === payment.project_id)
-        return isProjectOwner(project, userId) || payment.type === 'freelancer'
+        const projectRoleIds = assignmentRowsData
+          .filter(
+            (assignment) =>
+              assignment.project_id === payment.project_id && assignment.assigned_to === userId
+          )
+          .map((assignment) => assignment.id)
+
+        return (
+          isProjectOwner(project, userId) ||
+          (payment.type === 'freelancer' &&
+            (!payment.assignment_id ||
+              projectRoleIds.length === 0 ||
+              projectRoleIds.includes(payment.assignment_id)))
+        )
       })
 
       milestoneRows = (milestonesResult.data as Milestone[] | null) || []
@@ -282,17 +333,19 @@ export default function Home() {
     setMilestones(milestoneRows)
     setMilestoneTasks(taskRows)
     setChangeRequests(changeRequestRows)
+    setProjectAssignments(assignmentRowsData)
   }
 
   function resetProjectForm() {
     setName('')
     setClient('')
-    setProjectType('web_app')
-    setPriority('medium')
+    setProjectTypes(['web_app'])
     setDeadline('')
     setDeal('')
-    setInternalCost('')
+    setDownPayment('')
+    setDownPaymentDate(new Date().toISOString().split('T')[0])
     setAssignedTo('')
+    setAssignmentRows([])
     setFormError('')
     setEditingProject(null)
   }
@@ -301,6 +354,7 @@ export default function Home() {
     setOpenActionProjectId('')
     resetProjectForm()
     setAssignedTo(currentUserId)
+    setAssignmentRows([defaultAssignmentRow('web_app', currentUserId)])
     setProjectModalMode('create')
   }
 
@@ -314,12 +368,36 @@ export default function Home() {
     setEditingProject(project)
     setName(project.name)
     setClient(project.client)
-    setProjectType((project.project_type as ProjectType) || 'web_app')
-    setPriority((project.priority as ProjectPriority) || 'medium')
+    setProjectTypes(projectTypeValues(project).length ? projectTypeValues(project) : ['web_app'])
     setDeadline(toDateTimeLocal(project.deadline_at))
     setDeal(String(project.total_deal || ''))
-    setInternalCost(String(project.internal_cost || ''))
+    setDownPayment('')
+    setDownPaymentDate(new Date().toISOString().split('T')[0])
     setAssignedTo(project.assigned_to || '')
+    const existingAssignments = projectAssignmentsForProject(projectAssignments, project.id)
+    setAssignmentRows(
+      existingAssignments.length
+        ? existingAssignments.map((assignment) => ({
+            id: assignment.id,
+            projectType: assignment.project_type as ProjectType,
+            roleLabel: assignment.role_label || projectAssignmentLabel(assignment),
+            assignedTo: assignment.assigned_to || '',
+            dealAmount: String(assignment.deal_amount || ''),
+            internalFee: String(assignment.internal_fee || ''),
+          }))
+        : [
+            {
+              projectType: projectTypeValues(project)[0] || 'web_app',
+              roleLabel: projectTypeLabel(projectTypeValues(project)[0] || 'web_app'),
+              assignedTo: project.assigned_to || currentUserId,
+              dealAmount: String(project.total_deal || ''),
+              internalFee:
+                project.assigned_to && project.assigned_to !== project.created_by
+                  ? String(project.internal_cost || '')
+                  : '',
+            },
+          ]
+    )
     setFormError('')
     setProjectModalMode('edit')
   }
@@ -329,6 +407,51 @@ export default function Home() {
     resetProjectForm()
   }
 
+  function toggleProjectType(value: ProjectType) {
+    setProjectTypes((current) => {
+      if (current.includes(value)) {
+        if (current.length === 1) return current
+        setAssignmentRows((rows) => rows.filter((row) => row.projectType !== value))
+        return current.filter((item) => item !== value)
+      }
+
+      setAssignmentRows((rows) => [...rows, defaultAssignmentRow(value, currentUserId)])
+      return [...current, value]
+    })
+  }
+
+  function addAssignmentRow(projectType = projectTypes[0] || 'web_app') {
+    setAssignmentRows((rows) => [...rows, defaultAssignmentRow(projectType, currentUserId)])
+  }
+
+  function updateAssignmentRow(index: number, patch: Partial<AssignmentFormRow>) {
+    setAssignmentRows((rows) =>
+      rows.map((row, rowIndex) => {
+        if (rowIndex !== index) return row
+
+        const nextRow = { ...row, ...patch }
+        if (
+          patch.assignedTo !== undefined &&
+          (!patch.assignedTo || patch.assignedTo === currentUserId)
+        ) {
+          nextRow.internalFee = ''
+        }
+        if (patch.projectType) {
+          nextRow.roleLabel = projectTypeLabel(patch.projectType)
+        }
+
+        return nextRow
+      })
+    )
+  }
+
+  function removeAssignmentRow(index: number) {
+    setAssignmentRows((rows) => {
+      if (rows.length === 1) return rows
+      return rows.filter((_, rowIndex) => rowIndex !== index)
+    })
+  }
+
   async function saveProject() {
     setFormError('')
     setNotice(null)
@@ -336,21 +459,98 @@ export default function Home() {
     const trimmedName = name.trim()
     const trimmedClient = client.trim()
     const dealValue = Number(deal)
-    const hasExternalAssignee = Boolean(assignedTo && assignedTo !== currentUserId)
-    const costValue = hasExternalAssignee ? Number(internalCost) : 0
+    const normalizedAssignments = assignmentRows
+      .filter((row) => projectTypes.includes(row.projectType))
+      .map((row, index) => {
+        const assignedUser = row.assignedTo || currentUserId
+        const isExternal = Boolean(assignedUser && assignedUser !== currentUserId)
+        const dealAmount = Number(row.dealAmount || 0)
+        const internalFee = isExternal ? Number(row.internalFee || 0) : 0
 
-    if (!trimmedName || !trimmedClient || !deal || !projectType) {
+        return {
+          id: row.id,
+          project_type: row.projectType,
+          role_label: row.roleLabel.trim() || projectTypeLabel(row.projectType),
+          assigned_to: assignedUser || null,
+          deal_amount: dealAmount,
+          internal_fee: internalFee,
+          sort_order: index,
+        }
+      })
+    const hasExternalAssignee = normalizedAssignments.some(
+      (assignment) => assignment.assigned_to && assignment.assigned_to !== currentUserId
+    )
+    const costValue = normalizedAssignments.reduce(
+      (total, assignment) => total + Number(assignment.internal_fee || 0),
+      0
+    )
+    const downPaymentValue =
+      projectModalMode === 'create' ? Number(downPayment || 0) : 0
+
+    if (!trimmedName || !trimmedClient || !deal || projectTypes.length === 0) {
       setFormError('Nama, client, tipe project, dan deal wajib diisi.')
       return
     }
 
-    if (hasExternalAssignee && !internalCost) {
-      setFormError('Fee freelancer wajib diisi ketika project diberikan ke orang lain.')
+    if (normalizedAssignments.length === 0) {
+      setFormError('Minimal satu pembagian kerja wajib dibuat.')
+      return
+    }
+
+    const invalidAssignment = normalizedAssignments.find(
+      (assignment) =>
+        Number.isNaN(assignment.deal_amount) ||
+        Number.isNaN(assignment.internal_fee) ||
+        assignment.deal_amount < 0 ||
+        assignment.internal_fee < 0 ||
+        assignment.internal_fee > assignment.deal_amount
+    )
+
+    if (invalidAssignment) {
+      setFormError('Porsi deal dan fee tiap role harus valid, dan fee tidak boleh melebihi porsinya.')
+      return
+    }
+
+    const allocatedDeal = normalizedAssignments.reduce(
+      (total, assignment) => total + Number(assignment.deal_amount || 0),
+      0
+    )
+
+    if (allocatedDeal > dealValue) {
+      setFormError('Total porsi deal role tidak boleh melebihi deal client.')
+      return
+    }
+
+    if (
+      hasExternalAssignee &&
+      normalizedAssignments.some(
+        (assignment) =>
+          assignment.assigned_to &&
+          assignment.assigned_to !== currentUserId &&
+          assignment.internal_fee <= 0
+      )
+    ) {
+      setFormError('Fee freelancer wajib diisi untuk role yang dikerjakan orang lain.')
       return
     }
 
     if (Number.isNaN(dealValue) || Number.isNaN(costValue) || dealValue <= 0 || costValue < 0) {
       setFormError('Nilai project harus berupa angka yang valid.')
+      return
+    }
+
+    if (Number.isNaN(downPaymentValue) || downPaymentValue < 0) {
+      setFormError('Down payment harus berupa angka yang valid.')
+      return
+    }
+
+    if (downPaymentValue > dealValue) {
+      setFormError('Down payment tidak boleh lebih besar dari deal client.')
+      return
+    }
+
+    if (downPaymentValue > 0 && !downPaymentDate) {
+      setFormError('Tanggal down payment wajib diisi.')
       return
     }
 
@@ -374,12 +574,18 @@ export default function Home() {
     const payload = {
       name: trimmedName,
       client: trimmedClient,
-      project_type: projectType,
-      priority,
+      project_type: projectTypes[0],
+      project_types: projectTypes,
       deadline_at: deadline ? new Date(deadline).toISOString() : null,
       total_deal: dealValue,
       internal_cost: costValue,
-      assigned_to: assignedTo || null,
+      assigned_to:
+        normalizedAssignments.find(
+          (assignment) => assignment.assigned_to && assignment.assigned_to !== currentUserId
+        )?.assigned_to ||
+        normalizedAssignments.find((assignment) => assignment.assigned_to)?.assigned_to ||
+        assignedTo ||
+        null,
     }
 
     const result =
@@ -410,6 +616,105 @@ export default function Home() {
     if (projectModalMode === 'edit' && !result.data?.length) {
       setFormError('Project tidak berubah karena akses sudah tidak valid.')
       return
+    }
+
+    const savedProjectId = result.data?.[0]?.id
+
+    if (savedProjectId) {
+      const assignmentPayload = normalizedAssignments.map((assignment) => ({
+        project_id: savedProjectId,
+        project_type: assignment.project_type,
+        role_label: assignment.role_label,
+        assigned_to: assignment.assigned_to,
+        deal_amount: assignment.deal_amount,
+        internal_fee: assignment.internal_fee,
+        sort_order: assignment.sort_order,
+      }))
+
+      if (projectModalMode === 'edit') {
+        const existingRows = projectAssignmentsForProject(projectAssignments, savedProjectId)
+        const keepIds = normalizedAssignments
+          .map((assignment) => assignment.id)
+          .filter((assignmentId): assignmentId is string => Boolean(assignmentId))
+        const deleteIds = existingRows
+          .map((assignment) => assignment.id)
+          .filter((assignmentId) => !keepIds.includes(assignmentId))
+
+        if (deleteIds.length > 0) {
+          const { error: deleteAssignmentError } = await supabase
+            .from('project_assignments')
+            .delete()
+            .in('id', deleteIds)
+
+          if (deleteAssignmentError) {
+            console.error(deleteAssignmentError)
+            setFormError('Project tersimpan, tetapi role lama gagal dibersihkan.')
+            setSavingProject(false)
+            return
+          }
+        }
+
+        for (const assignment of normalizedAssignments) {
+          const payloadRow = {
+            project_id: savedProjectId,
+            project_type: assignment.project_type,
+            role_label: assignment.role_label,
+            assigned_to: assignment.assigned_to,
+            deal_amount: assignment.deal_amount,
+            internal_fee: assignment.internal_fee,
+            sort_order: assignment.sort_order,
+          }
+
+          const assignmentResult = assignment.id
+            ? await supabase.from('project_assignments').update(payloadRow).eq('id', assignment.id)
+            : await supabase.from('project_assignments').insert(payloadRow)
+
+          if (assignmentResult.error) {
+            console.error(assignmentResult.error)
+            setFormError('Project tersimpan, tetapi pembagian kerja gagal diupdate.')
+            setSavingProject(false)
+            return
+          }
+        }
+      } else if (assignmentPayload.length > 0) {
+        const { error: assignmentError } = await supabase
+          .from('project_assignments')
+          .insert(assignmentPayload)
+
+        if (assignmentError) {
+          console.error(assignmentError)
+          closeProjectModal()
+          setNotice({
+            type: 'error',
+            message:
+              'Project tersimpan, tetapi pembagian kerja gagal dibuat. Jalankan migrasi Supabase terbaru lalu edit Tim & Fee.',
+          })
+          setSavingProject(false)
+          if (currentUserId) await fetchAll(currentUserId)
+          return
+        }
+      }
+    }
+
+    if (projectModalMode === 'create' && downPaymentValue > 0 && savedProjectId) {
+      const { error: paymentError } = await supabase.from('payments').insert({
+        project_id: savedProjectId,
+        type: 'client',
+        amount: downPaymentValue,
+        note: 'Down payment awal',
+        date: downPaymentDate,
+      })
+
+      if (paymentError) {
+        console.error(paymentError)
+        closeProjectModal()
+        setNotice({
+          type: 'error',
+          message: 'Project tersimpan, tetapi down payment gagal dicatat. Tambahkan payment manual.',
+        })
+        if (currentUserId) await fetchAll(currentUserId)
+        return
+      }
     }
 
     const successMessage =
@@ -492,15 +797,33 @@ export default function Home() {
     return map
   }, [changeRequests, projects])
 
+  const assignmentsByProject = useMemo(() => {
+    const map: Record<string, ProjectAssignment[]> = {}
+
+    projects.forEach((project) => {
+      map[project.id] = []
+    })
+    projectAssignments.forEach((assignment) => {
+      map[assignment.project_id] ||= []
+      map[assignment.project_id].push(assignment)
+    })
+
+    return map
+  }, [projectAssignments, projects])
+
   const financialsByProject = useMemo(() => {
     const map: Record<string, ReturnType<typeof projectFinancials>> = {}
 
     projects.forEach((project) => {
-      map[project.id] = projectFinancials(project, changeRequestsByProject[project.id])
+      map[project.id] = projectFinancials(
+        project,
+        changeRequestsByProject[project.id],
+        assignmentsByProject[project.id]
+      )
     })
 
     return map
-  }, [changeRequestsByProject, projects])
+  }, [assignmentsByProject, changeRequestsByProject, projects])
 
   const userById = useMemo(() => {
     const map: Record<string, AppUser> = {}
@@ -519,9 +842,13 @@ export default function Home() {
     () =>
       projects.filter(
         (project) =>
-          isProjectAssignee(project, currentUserId) && !isProjectOwner(project, currentUserId)
+          !isProjectOwner(project, currentUserId) &&
+          (isProjectAssignee(project, currentUserId) ||
+            (assignmentsByProject[project.id] || []).some(
+              (assignment) => assignment.assigned_to === currentUserId
+            ))
       ),
-    [currentUserId, projects]
+    [assignmentsByProject, currentUserId, projects]
   )
 
   const summary = useMemo(() => {
@@ -631,8 +958,18 @@ export default function Home() {
       const project = projectById[payment.project_id || '']
       if (!isProjectOwner(project, currentUserId)) return
 
-      const type = project?.project_type || 'uncategorized'
-      totals[type] = (totals[type] || 0) + Number(payment.amount || 0)
+      const types = projectTypeValues(project)
+      const amount = Number(payment.amount || 0)
+
+      if (types.length === 0) {
+        totals.uncategorized = (totals.uncategorized || 0) + amount
+        return
+      }
+
+      const allocatedAmount = amount / types.length
+      types.forEach((type) => {
+        totals[type] = (totals[type] || 0) + allocatedAmount
+      })
     })
 
     const typedRevenue = projectTypeOptions.map((option) => ({
@@ -708,11 +1045,7 @@ export default function Home() {
     }
 
     if (typeFilter !== 'all') {
-      result = result.filter((project) => project.project_type === typeFilter)
-    }
-
-    if (priorityFilter !== 'all') {
-      result = result.filter((project) => project.priority === priorityFilter)
+      result = result.filter((project) => projectTypeValues(project).includes(typeFilter))
     }
 
     if (sortBy === 'newest') {
@@ -736,10 +1069,6 @@ export default function Home() {
 
         return bValue - aValue
       })
-    } else if (sortBy === 'priority') {
-      result.sort(
-        (a, b) => projectPriorityRank(b.priority) - projectPriorityRank(a.priority)
-      )
     } else if (sortBy === 'deadline') {
       result.sort((a, b) => {
         if (!a.deadline_at) return 1
@@ -752,7 +1081,6 @@ export default function Home() {
   }, [
     currentUserId,
     financialsByProject,
-    priorityFilter,
     projects,
     search,
     sortBy,
@@ -772,21 +1100,31 @@ export default function Home() {
   )
 
   const deadlinesByDate = useMemo(() => {
-    const map: Record<string, Array<{ title: string }>> = {}
+    const map: Record<string, Record<string, CalendarDeadlineGroup>> = {}
+    const addDeadline = (
+      key: string,
+      projectId: string,
+      title: string,
+      type: CalendarDeadlineType
+    ) => {
+      map[key] ||= {}
+      map[key][projectId] ||= { projectId, title, types: [] }
+      if (!map[key][projectId].types.includes(type)) {
+        map[key][projectId].types.push(type)
+      }
+    }
 
     deadlineProjects.forEach((project) => {
       if (!project.deadline_at) return
       const key = localDateKey(new Date(project.deadline_at))
-      map[key] ||= []
-      map[key].push({ title: project.name })
+      addDeadline(key, project.id, project.name, 'project')
     })
 
     milestones.forEach((milestone) => {
       const project = projectById[milestone.project_id]
       if (!milestone.deadline_at || milestone.status === 'done' || project?.status === 'done') return
       const key = localDateKey(new Date(milestone.deadline_at))
-      map[key] ||= []
-      map[key].push({ title: `${project?.name || 'Project'}: ${milestone.title}` })
+      addDeadline(key, milestone.project_id, project?.name || 'Project', 'milestone')
     })
 
     changeRequests.forEach((changeRequest) => {
@@ -799,11 +1137,12 @@ export default function Home() {
         return
       }
       const key = localDateKey(new Date(changeRequest.deadline_at))
-      map[key] ||= []
-      map[key].push({ title: `${project?.name || 'Project'}: ${changeRequest.title}` })
+      addDeadline(key, changeRequest.project_id, project?.name || 'Project', 'scope')
     })
 
-    return map
+    return Object.fromEntries(
+      Object.entries(map).map(([key, value]) => [key, Object.values(value)])
+    )
   }, [changeRequests, deadlineProjects, milestones, projectById])
 
   const notifications = useMemo<DashboardNotification[]>(() => {
@@ -859,7 +1198,7 @@ export default function Home() {
           id: `change-pending-${changeRequest.id}`,
           projectId: changeRequest.project_id,
           title: changeRequest.title,
-          detail: `Change request ${project.name} menunggu persetujuan`,
+          detail: `Tambahan scope ${project.name} menunggu persetujuan`,
           deadline: changeRequest.deadline_at,
           tone: 'info',
         })
@@ -873,7 +1212,7 @@ export default function Home() {
           id: `change-${changeRequest.id}`,
           projectId: changeRequest.project_id,
           title: changeRequest.title,
-          detail: `Change request ${state.label.toLowerCase()}`,
+          detail: `Tambahan scope ${state.label.toLowerCase()}`,
           deadline: changeRequest.deadline_at,
           tone: state.tone === 'danger' ? 'danger' : 'warning',
         })
@@ -890,14 +1229,45 @@ export default function Home() {
   }, [changeRequests, currentUserId, milestones, projectById, projects])
 
   const calendarDays = calendarCells(calendarMonth)
-  const hasExternalAssignee = Boolean(assignedTo && assignedTo !== currentUserId)
+  const hasExternalAssignee = assignmentRows.some(
+    (row) => row.assignedTo && row.assignedTo !== currentUserId
+  )
+  const formAssignmentDealTotal = assignmentDealTotal(
+    assignmentRows.map((row) => ({
+      id: row.id || row.projectType,
+      project_id: editingProject?.id || '',
+      project_type: row.projectType,
+      assigned_to: row.assignedTo || currentUserId,
+      role_label: row.roleLabel,
+      deal_amount: Number(row.dealAmount || 0),
+      internal_fee: row.assignedTo && row.assignedTo !== currentUserId ? Number(row.internalFee || 0) : 0,
+    }))
+  )
+  const formAssignmentFeeTotal = assignmentExternalFeeTotal(
+    assignmentRows.map((row) => ({
+      id: row.id || row.projectType,
+      project_id: editingProject?.id || '',
+      project_type: row.projectType,
+      assigned_to: row.assignedTo || currentUserId,
+      role_label: row.roleLabel,
+      deal_amount: Number(row.dealAmount || 0),
+      internal_fee: row.assignedTo && row.assignedTo !== currentUserId ? Number(row.internalFee || 0) : 0,
+    })),
+    { created_by: currentUserId }
+  )
   const deleteTarget = confirmAction?.type === 'delete' ? confirmAction.project : null
   const isLoggingOut = confirmAction?.type === 'logout'
+  const todayLabel = new Date().toLocaleDateString('id-ID', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
 
   if (pageLoading) {
     return (
       <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
-        <div className="mx-auto max-w-7xl rounded-lg border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
+        <div className="mx-auto max-w-7xl rounded-2xl border border-slate-200 bg-white p-6 text-slate-600 shadow-sm">
           Loading dashboard...
         </div>
       </main>
@@ -907,7 +1277,7 @@ export default function Home() {
   if (loadError) {
     return (
       <main className="min-h-screen bg-slate-100 p-4 sm:p-6">
-        <div className="mx-auto max-w-7xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mx-auto max-w-7xl rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h1 className="text-lg font-semibold text-slate-950">Dashboard tidak bisa dimuat</h1>
           <p className="mt-2 text-sm text-slate-500">{loadError}</p>
           <div className="mt-4 flex flex-col gap-2 sm:flex-row">
@@ -932,121 +1302,246 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 pb-24 sm:pb-0">
-      <div className="mx-auto max-w-7xl px-4 py-5 sm:px-6 lg:px-8">
-        <header className="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-950 sm:text-3xl">Task Manager</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                Kelola scope, deadline, progres, dan cashflow project dalam satu dashboard.
-              </p>
+    <main className="min-h-screen bg-[#dfe3e6] p-0 text-slate-950 lg:p-6">
+      <div className="mx-auto flex min-h-screen max-w-[1720px] overflow-hidden bg-[#f8f8f7] shadow-2xl shadow-slate-500/20 ring-1 ring-slate-200 lg:min-h-[calc(100vh-3rem)] lg:rounded-[28px]">
+        <aside className="hidden w-72 shrink-0 border-r border-slate-200 bg-[#f5f5f4] lg:flex lg:flex-col">
+          <div className="flex h-[76px] items-center justify-between border-b border-slate-200 px-6">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-slate-950 text-sm font-black text-white">
+                u
+              </div>
+              <div>
+                <p className="text-lg font-bold tracking-tight text-slate-950">uiuxmart</p>
+                <p className="text-xs font-medium text-slate-500">project workspace</p>
+              </div>
+            </div>
+            <span className="text-xl text-slate-400">‹</span>
+          </div>
+
+          <nav className="flex-1 overflow-y-auto px-4 py-5">
+            <p className="px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Main Menu
+            </p>
+            <div className="mt-3 space-y-1">
+              {[
+                ['Dashboard', summary.totalProjects],
+                ['Cashflow', monthlyPayments.length],
+                ['Deadline', deadlineProjects.length],
+                ['Tambahan Scope', summary.pendingChanges],
+              ].map(([label, count]) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${
+                    label === 'Dashboard'
+                      ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:bg-white hover:text-slate-950'
+                  }`}
+                >
+                  <span>{label}</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">
+                    {count}
+                  </span>
+                </button>
+              ))}
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="relative self-end sm:self-auto">
+            <div className="my-6 border-t border-dashed border-slate-200" />
+
+            <p className="px-3 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Workspace
+            </p>
+            <div className="mt-3 space-y-1">
+              {projectTypeOptions.map((option) => (
                 <button
+                  key={option.value}
                   type="button"
-                  onClick={() => setNotificationsOpen((current) => !current)}
-                  className="relative grid h-10 w-10 place-items-center rounded-full border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
-                  aria-label="Buka notifikasi"
-                  aria-expanded={notificationsOpen}
+                  onClick={() => setTypeFilter(option.value)}
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-600 transition hover:bg-white hover:text-slate-950"
                 >
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    className="h-5 w-5"
-                  >
-                    <path
-                      d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  {notifications.length > 0 && (
-                    <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
-                      {Math.min(notifications.length, 99)}
-                    </span>
-                  )}
+                  <span
+                    className="h-2.5 w-2.5 rounded-full"
+                    style={{ backgroundColor: option.chartColor }}
+                  />
+                  <span>{option.label}</span>
                 </button>
+              ))}
+            </div>
+          </nav>
 
-                {notificationsOpen && (
-                  <div className="absolute right-0 top-12 z-40 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
-                    <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-950">Notifikasi</p>
-                        <p className="text-xs text-slate-500">
-                          Deadline 7 hari ke depan dan approval
-                        </p>
-                      </div>
-                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                        {notifications.length}
-                      </span>
-                    </div>
-                    <div className="max-h-96 overflow-y-auto">
-                      {notifications.length === 0 ? (
-                        <p className="px-4 py-8 text-center text-sm text-slate-500">
-                          Tidak ada hal mendesak saat ini.
-                        </p>
-                      ) : (
-                        notifications.map((notification) => (
-                          <Link
-                            key={notification.id}
-                            href={`/project/${notification.projectId}`}
-                            onClick={() => setNotificationsOpen(false)}
-                            className="flex gap-3 border-b border-slate-100 px-4 py-3 transition last:border-0 hover:bg-slate-50"
-                          >
-                            <span
-                              className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
-                                notification.tone === 'danger'
-                                  ? 'bg-red-500'
-                                  : notification.tone === 'warning'
-                                    ? 'bg-amber-500'
-                                    : 'bg-sky-500'
-                              }`}
-                            />
-                            <span className="min-w-0">
-                              <span className="block truncate text-sm font-semibold text-slate-900">
-                                {notification.title}
-                              </span>
-                              <span className="mt-0.5 block text-xs leading-5 text-slate-500">
-                                {notification.detail}
-                              </span>
-                              {notification.deadline && (
-                                <span className="mt-1 block text-[11px] font-medium text-slate-400">
-                                  {formatDateTime(notification.deadline)}
-                                </span>
-                              )}
-                            </span>
-                          </Link>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-sm font-semibold leading-5 text-slate-950">
-                  {currentUserName || currentUserEmail || 'User'}
-                </p>
-                {currentUserEmail && (
-                  <p className="text-xs leading-4 text-slate-500">{currentUserEmail}</p>
-                )}
-              </div>
+          <div className="border-t border-slate-200 p-4">
+            <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200">
+              <p className="text-sm font-semibold text-slate-950">
+                {currentUserName || currentUserEmail || 'User'}
+              </p>
+              {currentUserEmail && (
+                <p className="mt-1 truncate text-xs text-slate-500">{currentUserEmail}</p>
+              )}
               <button
                 type="button"
                 onClick={() => setConfirmAction({ type: 'logout' })}
-                className="rounded border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-slate-50"
+                className="mt-3 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 Logout
               </button>
             </div>
           </div>
-        </header>
+        </aside>
+
+        <section className="min-w-0 flex-1">
+          <header className="sticky top-0 z-30 border-b border-slate-200 bg-[#fbfbfa]/95 backdrop-blur">
+            <div className="flex min-h-[76px] flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-6">
+              <div className="flex items-center gap-3 lg:hidden">
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-slate-950 text-sm font-black text-white">
+                  u
+                </div>
+                <div>
+                  <p className="text-lg font-bold text-slate-950">uiuxmart</p>
+                  <p className="text-xs text-slate-500">workspace</p>
+                </div>
+              </div>
+
+              <div className="hidden items-center gap-2 text-sm lg:flex">
+                <span className="font-medium text-slate-400">Main Menu</span>
+                <span className="text-slate-300">›</span>
+                <span className="font-semibold text-slate-950">Dashboard</span>
+              </div>
+
+              <div className="flex flex-1 flex-col gap-2 sm:flex-row lg:max-w-3xl">
+                <div className="relative min-w-0 flex-1">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400"
+                  >
+                    <path d="m21 21-4.35-4.35M11 19a8 8 0 1 1 0-16 8 8 0 0 1 0 16Z" strokeLinecap="round" />
+                  </svg>
+                  <input
+                    placeholder="Cari project atau client..."
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    className="h-12 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 text-sm outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-200/70"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={openCreateProjectModal}
+                  className="h-12 rounded-xl bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-800"
+                >
+                  Add Project +
+                </button>
+
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setNotificationsOpen((current) => !current)}
+                    className="relative grid h-12 w-12 place-items-center rounded-xl border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-50"
+                    aria-label="Buka notifikasi"
+                    aria-expanded={notificationsOpen}
+                  >
+                    <svg
+                      aria-hidden="true"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      className="h-5 w-5"
+                    >
+                      <path
+                        d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    {notifications.length > 0 && (
+                      <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">
+                        {Math.min(notifications.length, 99)}
+                      </span>
+                    )}
+                  </button>
+
+                  {notificationsOpen && (
+                    <div className="absolute right-0 top-14 z-40 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                      <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-950">Notifikasi</p>
+                          <p className="text-xs text-slate-500">
+                            Deadline 7 hari ke depan dan persetujuan scope
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                          {notifications.length}
+                        </span>
+                      </div>
+                      <div className="max-h-96 overflow-y-auto">
+                        {notifications.length === 0 ? (
+                          <p className="px-4 py-8 text-center text-sm text-slate-500">
+                            Tidak ada hal mendesak saat ini.
+                          </p>
+                        ) : (
+                          notifications.map((notification) => (
+                            <Link
+                              key={notification.id}
+                              href={`/project/${notification.projectId}`}
+                              onClick={() => setNotificationsOpen(false)}
+                              className="flex gap-3 border-b border-slate-100 px-4 py-3 transition last:border-0 hover:bg-slate-50"
+                            >
+                              <span
+                                className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${
+                                  notification.tone === 'danger'
+                                    ? 'bg-red-500'
+                                    : notification.tone === 'warning'
+                                      ? 'bg-amber-500'
+                                      : 'bg-sky-500'
+                                }`}
+                              />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-semibold text-slate-900">
+                                  {notification.title}
+                                </span>
+                                <span className="mt-0.5 block text-xs leading-5 text-slate-500">
+                                  {notification.detail}
+                                </span>
+                                {notification.deadline && (
+                                  <span className="mt-1 block text-[11px] font-medium text-slate-400">
+                                    {formatDateTime(notification.deadline)}
+                                  </span>
+                                )}
+                              </span>
+                            </Link>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <div className="px-4 py-5 sm:px-6 lg:px-7">
+            <section className="mb-6 flex flex-col gap-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-500">{todayLabel}</p>
+                <h1 className="mt-2 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
+                  Kelola project uiuxmart dengan lebih rapi.
+                </h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+                  Pantau deal, deadline, role freelancer, tambahan scope, dan cashflow dari satu
+                  workspace yang lebih clean.
+                </p>
+              </div>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(event) => setSelectedMonth(event.target.value)}
+                className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium outline-none transition focus:border-slate-400 focus:ring-4 focus:ring-slate-200/70"
+              />
+            </section>
 
         {notice && (
           <div
@@ -1061,7 +1556,7 @@ export default function Home() {
         )}
 
         <section className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-slate-500">Total Project</p>
             <p className="mt-2 text-2xl font-semibold text-slate-950">{summary.totalProjects}</p>
             <p className="mt-1 text-xs text-slate-500">
@@ -1069,7 +1564,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-slate-500">Nilai Project</p>
             <p className="mt-2 text-2xl font-semibold text-slate-950">
               Rp {formatCompactRupiah(summary.ownerDeal)}
@@ -1079,7 +1574,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-slate-500">Pendapatan Diterima</p>
             <p className="mt-2 text-2xl font-semibold text-emerald-600">
               Rp {formatCompactRupiah(summary.ownerClientPaid)}
@@ -1089,7 +1584,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-slate-500">Estimasi Profit</p>
             <p className="mt-2 text-2xl font-semibold text-emerald-600">
               Rp {formatCompactRupiah(summary.ownerProfit)}
@@ -1099,17 +1594,17 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-medium text-slate-500">Perlu Tindakan</p>
             <p className="mt-2 text-2xl font-semibold text-amber-600">{notifications.length}</p>
             <p className="mt-1 text-xs text-slate-500">
-              {summary.pendingChanges} change request menunggu
+              {summary.pendingChanges} scope menunggu persetujuan
             </p>
           </div>
         </section>
 
         <section className="mb-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-col gap-4 border-b border-slate-200 px-5 py-4 md:flex-row md:items-start md:justify-between">
               <div>
                 <h2 className="font-semibold text-slate-950">Cashflow Terlihat</h2>
@@ -1127,19 +1622,19 @@ export default function Home() {
             </div>
 
             <div className="grid gap-3 border-b border-slate-200 bg-slate-50 px-5 py-4 sm:grid-cols-3">
-              <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
                 <p className="text-xs font-medium text-slate-500">Client Masuk</p>
                 <p className="mt-1 text-base font-semibold text-emerald-600">
                   Rp {formatCompactRupiah(monthlySummary.clientPaid)}
                 </p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
                 <p className="text-xs font-medium text-slate-500">Pekerjaan Dibayar</p>
                 <p className="mt-1 text-base font-semibold text-amber-600">
                   Rp {formatCompactRupiah(monthlySummary.freelancerPaid)}
                 </p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="rounded-2xl border border-slate-200 bg-white p-3">
                 <p className="text-xs font-medium text-slate-500">Net Owner</p>
                 <p
                   className={`mt-1 text-base font-semibold ${
@@ -1220,7 +1715,7 @@ export default function Home() {
             </div>
           </div>
 
-          <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <aside className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div>
               <h2 className="font-semibold text-slate-950">Pendapatan per Tipe</h2>
               <p className="text-sm text-slate-500">Payment client pada bulan pilihan</p>
@@ -1285,12 +1780,12 @@ export default function Home() {
         </section>
 
         <section className="mb-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex items-center justify-between gap-3">
               <div>
                 <h2 className="font-semibold text-slate-950">Kalender Deadline</h2>
                 <p className="text-sm text-slate-500">
-                  Project, milestone, dan change request aktif
+                  Project, milestone, dan tambahan scope aktif
                 </p>
               </div>
               <div className="flex items-center gap-1">
@@ -1332,10 +1827,12 @@ export default function Home() {
                 return (
                   <div
                     key={key}
-                    title={dayProjects.map((item) => item.title).join(', ')}
+                    title={dayProjects
+                      .map((item) => `${item.title}: ${item.types.join(', ')}`)
+                      .join(' | ')}
                     className={`min-h-16 rounded-lg border p-2 text-left sm:min-h-20 ${
                       dayProjects.length
-                        ? 'border-rose-200 bg-rose-50'
+                        ? 'border-sky-200 bg-sky-50'
                         : 'border-slate-100 bg-slate-50/60'
                     }`}
                   >
@@ -1347,19 +1844,49 @@ export default function Home() {
                       {date.getDate()}
                     </span>
                     {dayProjects.length > 0 && (
-                      <div className="mt-2">
-                        <span className="inline-flex rounded-full bg-rose-600 px-2 py-0.5 text-[10px] font-semibold text-white">
-                          {dayProjects.length} deadline
+                      <div className="mt-2 space-y-1">
+                        <span className="inline-flex rounded-full bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                          {dayProjects.length} project
                         </span>
+                        <div className="flex flex-wrap gap-1">
+                          {Array.from(new Set(dayProjects.flatMap((item) => item.types))).map(
+                            (type) => (
+                              <span
+                                key={type}
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                  type === 'project'
+                                    ? 'bg-rose-500'
+                                    : type === 'milestone'
+                                      ? 'bg-sky-500'
+                                      : 'bg-violet-500'
+                                }`}
+                              />
+                            )
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
                 )
               })}
             </div>
+            <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-rose-500" />
+                Project
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-sky-500" />
+                Milestone
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-violet-500" />
+                Tambahan scope
+              </span>
+            </div>
           </div>
 
-          <aside className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <aside className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4">
               <h2 className="font-semibold text-slate-950">Deadline Terdekat</h2>
               <p className="text-sm text-slate-500">Project aktif yang perlu diperhatikan</p>
@@ -1442,14 +1969,7 @@ export default function Home() {
                 ))}
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_210px_170px_180px]">
-                <input
-                  placeholder="Cari project atau client..."
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                />
-
+              <div className="grid gap-2 sm:grid-cols-2 lg:max-w-[420px] lg:grid-cols-[220px_180px]">
                 <select
                   value={typeFilter}
                   onChange={(event) => setTypeFilter(event.target.value as ProjectTypeFilter)}
@@ -1464,26 +1984,12 @@ export default function Home() {
                 </select>
 
                 <select
-                  value={priorityFilter}
-                  onChange={(event) => setPriorityFilter(event.target.value as PriorityFilter)}
-                  className="rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                >
-                  <option value="all">Semua prioritas</option>
-                  {projectPriorityOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-
-                <select
                   value={sortBy}
                   onChange={(event) => setSortBy(event.target.value as SortOption)}
                   className="rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
                 >
                   <option value="newest">Terbaru</option>
                   <option value="oldest">Terlama</option>
-                  <option value="priority">Prioritas tertinggi</option>
                   <option value="deadline">Deadline terdekat</option>
                   <option value="name">Nama A-Z</option>
                   <option value="value">Nilai terbesar</option>
@@ -1493,7 +1999,7 @@ export default function Home() {
           </div>
 
           {filteredProjects.length === 0 ? (
-            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+            <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
               Tidak ada project yang cocok dengan filter.
             </div>
           ) : (
@@ -1525,7 +2031,7 @@ export default function Home() {
                 return (
                   <div
                     key={project.id}
-                    className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+                    className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md"
                   >
                     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
                       <Link
@@ -1545,20 +2051,22 @@ export default function Home() {
                               >
                                 {statusLabel(project.status)}
                               </span>
-                              <span
-                                className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${projectTypeClass(
-                                  project.project_type
-                                )}`}
-                              >
-                                {projectTypeLabel(project.project_type)}
-                              </span>
-                              <span
-                                className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${projectPriorityClass(
-                                  project.priority
-                                )}`}
-                              >
-                                {projectPriorityLabel(project.priority)}
-                              </span>
+                              {projectTypeValues(project).length === 0 ? (
+                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                                  Belum dikategorikan
+                                </span>
+                              ) : (
+                                projectTypeValues(project).map((type) => (
+                                  <span
+                                    key={type}
+                                    className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${projectTypeClass(
+                                      type
+                                    )}`}
+                                  >
+                                    {projectTypeLabel(type)}
+                                  </span>
+                                ))
+                              )}
                             </div>
 
                             <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
@@ -1571,9 +2079,7 @@ export default function Home() {
                                     : 'Belum di-assign'
                                   : 'Ditugaskan ke saya'}
                               </span>
-                              {projectChanges.length > 0 && (
-                                <span>{projectChanges.length} change request</span>
-                              )}
+                              {projectChanges.length > 0 && <span>{projectChanges.length} tambahan scope</span>}
                             </div>
 
                             {project.deadline_at && (
@@ -1646,7 +2152,7 @@ export default function Home() {
                           </button>
 
                           {openActionProjectId === project.id && (
-                            <div className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                            <div className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1 shadow-lg">
                               <button
                                 type="button"
                                 onClick={() => openEditProjectModal(project)}
@@ -1704,36 +2210,31 @@ export default function Home() {
                 </label>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Tipe project</span>
-                  <select
-                    value={projectType}
-                    onChange={(event) => setProjectType(event.target.value as ProjectType)}
-                    className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                  >
-                    {projectTypeOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Prioritas</span>
-                  <select
-                    value={priority}
-                    onChange={(event) => setPriority(event.target.value as ProjectPriority)}
-                    className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                  >
-                    {projectPriorityOptions.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div>
+                  <span className="mb-2 block text-sm font-medium text-slate-700">
+                    Tipe project
+                  </span>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {projectTypeOptions.map((option) => {
+                      const checked = projectTypes.includes(option.value)
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => toggleProjectType(option.value)}
+                          className={`rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
+                            checked
+                              ? 'border-slate-950 bg-slate-950 text-white'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
 
                 <label className="block">
                   <span className="mb-1 block text-sm font-medium text-slate-700">
@@ -1749,59 +2250,214 @@ export default function Home() {
               </div>
 
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-700">Dikerjakan oleh</span>
-                <select
-                  value={assignedTo}
-                  onChange={(event) => {
-                    const nextAssignee = event.target.value
-                    setAssignedTo(nextAssignee)
-                    if (!nextAssignee || nextAssignee === currentUserId) setInternalCost('')
-                  }}
+                <span className="mb-1 block text-sm font-medium text-slate-700">Deal client</span>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={deal}
+                  onChange={(event) => setDeal(event.target.value)}
                   className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                >
-                  <option value="">Belum di-assign</option>
-                  {users.map((user) => (
-                    <option key={user.id} value={user.id}>
-                      {user.id === currentUserId ? `${userLabel(user)} (Saya)` : userLabel(user)}
-                    </option>
-                  ))}
-                </select>
-                {!hasExternalAssignee && (
-                  <span className="mt-1 block text-xs text-emerald-700">
-                    Tidak ada fee freelancer. Profit project dihitung penuh dari deal client.
-                  </span>
-                )}
+                />
               </label>
 
-              <div className={`grid gap-4 ${hasExternalAssignee ? 'sm:grid-cols-2' : ''}`}>
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-700">Deal client</span>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="0"
-                    value={deal}
-                    onChange={(event) => setDeal(event.target.value)}
-                    className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                  />
-                </label>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-950">
+                      Pembagian kerja & fee
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">
+                      Satu project bisa punya beberapa role. Freelancer hanya akan melihat scope,
+                      milestone, dan payment yang terhubung ke role miliknya.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => addAssignmentRow()}
+                    className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    + Role
+                  </button>
+                </div>
 
-                {hasExternalAssignee && (
-                  <label className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-700">
-                      Fee freelancer
-                    </span>
-                    <input
-                      type="number"
-                      min="0"
-                      placeholder="0"
-                      value={internalCost}
-                      onChange={(event) => setInternalCost(event.target.value)}
-                      className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 focus:ring-4 focus:ring-slate-200"
-                    />
-                  </label>
-                )}
+                <div className="mt-4 space-y-3">
+                  {assignmentRows.map((row, index) => {
+                    const isExternal = Boolean(row.assignedTo && row.assignedTo !== currentUserId)
+
+                    return (
+                      <div
+                        key={`${row.id || row.projectType}-${index}`}
+                        className="rounded-2xl border border-slate-200 bg-white p-3"
+                      >
+                        <div className="grid gap-3 md:grid-cols-[1fr_1fr]">
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-medium text-slate-600">
+                              Tipe kerja
+                            </span>
+                            <select
+                              value={row.projectType}
+                              onChange={(event) =>
+                                updateAssignmentRow(index, {
+                                  projectType: event.target.value as ProjectType,
+                                })
+                              }
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950"
+                            >
+                              {projectTypes.map((type) => (
+                                <option key={type} value={type}>
+                                  {projectTypeLabel(type)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-medium text-slate-600">
+                              Nama role
+                            </span>
+                            <input
+                              value={row.roleLabel}
+                              onChange={(event) =>
+                                updateAssignmentRow(index, { roleLabel: event.target.value })
+                              }
+                              placeholder="Contoh: Program / Naskah"
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_150px_150px_auto] md:items-end">
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-medium text-slate-600">
+                              Pelaksana
+                            </span>
+                            <select
+                              value={row.assignedTo}
+                              onChange={(event) =>
+                                updateAssignmentRow(index, { assignedTo: event.target.value })
+                              }
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950"
+                            >
+                              <option value="">Belum di-assign</option>
+                              {users.map((user) => (
+                                <option key={user.id} value={user.id}>
+                                  {user.id === currentUserId
+                                    ? `${userLabel(user)} (Saya)`
+                                    : userLabel(user)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-medium text-slate-600">
+                              Porsi deal
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={row.dealAmount}
+                              onChange={(event) =>
+                                updateAssignmentRow(index, { dealAmount: event.target.value })
+                              }
+                              placeholder="0"
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950"
+                            />
+                          </label>
+
+                          <label className="block">
+                            <span className="mb-1 block text-xs font-medium text-slate-600">
+                              Fee freelancer
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={isExternal ? row.internalFee : ''}
+                              onChange={(event) =>
+                                updateAssignmentRow(index, { internalFee: event.target.value })
+                              }
+                              placeholder={isExternal ? '0' : 'Fee 0'}
+                              disabled={!isExternal}
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm outline-none transition focus:border-slate-950 disabled:bg-slate-100 disabled:text-slate-400"
+                            />
+                          </label>
+
+                          <button
+                            type="button"
+                            onClick={() => removeAssignmentRow(index)}
+                            disabled={assignmentRows.length === 1}
+                            className="rounded border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Hapus
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div className="mt-4 grid gap-3 text-xs sm:grid-cols-3">
+                  <div className="rounded-lg bg-white p-3">
+                    <p className="text-slate-500">Total porsi role</p>
+                    <p className="mt-1 font-semibold text-slate-950">
+                      Rp {formatRupiah(formAssignmentDealTotal)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-white p-3">
+                    <p className="text-slate-500">Total fee eksternal</p>
+                    <p className="mt-1 font-semibold text-slate-950">
+                      Rp {formatRupiah(formAssignmentFeeTotal)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg bg-white p-3">
+                    <p className="text-slate-500">Sisa belum dialokasikan</p>
+                    <p className="mt-1 font-semibold text-slate-950">
+                      Rp {formatRupiah(Math.max(0, Number(deal || 0) - formAssignmentDealTotal))}
+                    </p>
+                  </div>
+                </div>
               </div>
+
+              {projectModalMode === 'create' && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="mb-3">
+                    <p className="text-sm font-semibold text-emerald-900">
+                      Down payment diterima
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-emerald-700">
+                      Opsional. Jika diisi, payment client pertama otomatis dicatat setelah project
+                      tersimpan.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-emerald-900">
+                        Nominal DP
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={downPayment}
+                        onChange={(event) => setDownPayment(event.target.value)}
+                        className="w-full rounded border border-emerald-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="mb-1 block text-sm font-medium text-emerald-900">
+                        Tanggal DP
+                      </span>
+                      <input
+                        type="date"
+                        value={downPaymentDate}
+                        onChange={(event) => setDownPaymentDate(event.target.value)}
+                        className="w-full rounded border border-emerald-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
 
               {formError && (
                 <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
@@ -1809,14 +2465,16 @@ export default function Home() {
                 </p>
               )}
 
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-xs font-medium text-slate-500">Estimasi profit</p>
                 <p className="mt-1 text-xl font-semibold text-emerald-600">
-                  Rp{' '}
-                  {formatRupiah(
-                    Number(deal || 0) - (hasExternalAssignee ? Number(internalCost || 0) : 0)
-                  )}
+                  Rp {formatRupiah(Number(deal || 0) - formAssignmentFeeTotal)}
                 </p>
+                {!hasExternalAssignee && (
+                  <p className="mt-1 text-xs text-emerald-700">
+                    Semua role dikerjakan internal/saya, jadi tidak ada fee eksternal.
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
@@ -1843,6 +2501,8 @@ export default function Home() {
             </div>
           </Modal>
         )}
+          </div>
+        </section>
       </div>
 
       <button
@@ -1868,7 +2528,7 @@ export default function Home() {
         title="Hapus project?"
         description={
           deleteTarget
-            ? `Project "${deleteTarget.name}" akan dihapus bersama payment, change request, milestone, task, dan update.`
+            ? `Project "${deleteTarget.name}" akan dihapus bersama payment, tambahan scope, milestone, task, dan update.`
             : ''
         }
         confirmLabel="Delete Project"

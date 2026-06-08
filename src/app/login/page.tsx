@@ -87,12 +87,12 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-100 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+    <main className="min-h-screen bg-[#dfe3e6] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
       <div className="mx-auto grid min-h-[calc(100vh-48px)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_430px]">
         <section className="hidden lg:block">
           <div className="max-w-2xl">
             <p className="text-sm font-semibold uppercase text-emerald-700">
-              Task Manager
+              uiuxmart
             </p>
             <h1 className="mt-4 max-w-xl text-5xl font-semibold leading-tight text-slate-950">
               Workspace project dengan akses sesuai pembuat dan assignee.
@@ -110,13 +110,13 @@ export default function LoginPage() {
               ].map(([label, value, status]) => (
                 <div
                   key={label}
-                  className="grid grid-cols-[1fr_auto] items-center gap-4 rounded-lg border border-white/70 bg-white/80 px-4 py-3 shadow-sm"
+                  className="grid grid-cols-[1fr_auto] items-center gap-4 rounded-2xl border border-white/70 bg-white/80 px-4 py-3 shadow-sm"
                 >
                   <div>
                     <p className="text-xs font-medium text-slate-500">{label}</p>
                     <p className="mt-1 text-sm font-semibold text-slate-950">{value}</p>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  <span className="rounded-full bg-[#dfe3e6] px-3 py-1 text-xs font-semibold text-slate-600">
                     {status}
                   </span>
                 </div>
@@ -125,17 +125,17 @@ export default function LoginPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/70 sm:p-6">
+        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xl shadow-slate-200/70 sm:p-6">
           <div className="mb-6">
             <p className="text-sm font-semibold uppercase text-emerald-700">
-              Task Manager
+              uiuxmart
             </p>
             <h2 className="mt-3 text-2xl font-semibold text-slate-950">
               {mode === 'login' ? 'Masuk ke dashboard' : 'Buat akun baru'}
             </h2>
           </div>
 
-          <div className="mb-6 grid grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+          <div className="mb-6 grid grid-cols-2 rounded-2xl border border-slate-200 bg-slate-50 p-1">
             <button
               type="button"
               onClick={() => switchMode('login')}
@@ -203,13 +203,13 @@ export default function LoginPage() {
             </label>
 
             {errorMessage && (
-              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              <p className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
                 {errorMessage}
               </p>
             )}
 
             {message && (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
+              <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700">
                 {message}
               </p>
             )}
@@ -218,7 +218,7 @@ export default function LoginPage() {
               type="button"
               onClick={handleSubmit}
               disabled={loading}
-              className="w-full rounded bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {loading ? 'Memproses...' : mode === 'login' ? 'Login' : 'Register'}
             </button>

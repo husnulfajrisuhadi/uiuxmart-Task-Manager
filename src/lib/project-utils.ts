@@ -1,13 +1,24 @@
 export type PaymentType = 'client' | 'freelancer'
 export type ProjectStatus = 'ongoing' | 'review' | 'revision' | 'done'
 export type ProjectType = 'ui_ux_design' | 'thesis' | 'web_app'
-export type ProjectPriority = 'low' | 'medium' | 'high' | 'urgent'
-export type MilestoneStatus = 'planned' | 'in_progress' | 'review' | 'done'
+export type MilestoneStatus = 'planned' | 'in_progress' | 'review' | 'revision' | 'done'
 export type ChangeRequestStatus = 'pending' | 'approved' | 'in_progress' | 'done'
 export type StatusFilter = 'all' | ProjectStatus
 export type ProjectTypeFilter = 'all' | ProjectType
-export type PriorityFilter = 'all' | ProjectPriority
-export type SortOption = 'newest' | 'oldest' | 'name' | 'value' | 'deadline' | 'priority'
+export type SortOption = 'newest' | 'oldest' | 'name' | 'value' | 'deadline'
+
+export type ProjectAssignment = {
+  id: string
+  project_id: string
+  project_type: ProjectType | string
+  assigned_to?: string | null
+  role_label?: string | null
+  deal_amount: number | string | null
+  internal_fee: number | string | null
+  sort_order?: number | null
+  created_at?: string | null
+  updated_at?: string | null
+}
 
 export type Project = {
   id: string
@@ -15,7 +26,7 @@ export type Project = {
   client: string
   status: ProjectStatus | string
   project_type?: ProjectType | string | null
-  priority?: ProjectPriority | string | null
+  project_types?: ProjectType[] | string[] | null
   deadline_at?: string | null
   total_deal: number | string | null
   internal_cost: number | string | null
@@ -27,6 +38,7 @@ export type Project = {
 export type Payment = {
   id: string
   project_id: string | null
+  assignment_id?: string | null
   type: PaymentType
   amount: number | string | null
   note?: string | null
@@ -38,6 +50,7 @@ export type ProjectUpdate = {
   id: string
   note: string | null
   status: ProjectStatus | string
+  assignment_id?: string | null
   milestone_id?: string | null
   created_at?: string | null
 }
@@ -45,6 +58,7 @@ export type ProjectUpdate = {
 export type Milestone = {
   id: string
   project_id: string
+  assignment_id?: string | null
   title: string
   description?: string | null
   status: MilestoneStatus | string
@@ -67,6 +81,7 @@ export type MilestoneTask = {
 export type ChangeRequest = {
   id: string
   project_id: string
+  assignment_id?: string | null
   milestone_id?: string | null
   title: string
   description?: string | null
@@ -82,6 +97,29 @@ export type AppUser = {
   id: string
   name?: string | null
   email?: string | null
+}
+
+export type HandoverItem = {
+  id: string
+  project_id: string
+  title: string
+  is_completed: boolean
+  sort_order?: number | null
+  completed_at?: string | null
+  created_at?: string | null
+}
+
+export type MilestoneTemplate = {
+  title: string
+  description: string
+  tasks: string[]
+}
+
+export type MilestoneTemplateGroup = {
+  project_type: ProjectType
+  label: string
+  description: string
+  milestones: MilestoneTemplate[]
 }
 
 export const statusOptions: Array<{ value: StatusFilter; label: string }> = [
@@ -125,20 +163,11 @@ export const projectTypeOptions: Array<{
   },
 ]
 
-export const projectPriorityOptions: Array<{
-  value: ProjectPriority
-  label: string
-}> = [
-  { value: 'low', label: 'Rendah' },
-  { value: 'medium', label: 'Normal' },
-  { value: 'high', label: 'Tinggi' },
-  { value: 'urgent', label: 'Urgent' },
-]
-
 export const milestoneStatusOptions: Array<{ value: MilestoneStatus; label: string }> = [
-  { value: 'planned', label: 'Direncanakan' },
+  { value: 'planned', label: 'Belum Mulai' },
   { value: 'in_progress', label: 'Dikerjakan' },
-  { value: 'review', label: 'Review' },
+  { value: 'review', label: 'Review Client' },
+  { value: 'revision', label: 'Revisi' },
   { value: 'done', label: 'Selesai' },
 ]
 
@@ -146,14 +175,123 @@ export const changeRequestStatusOptions: Array<{
   value: ChangeRequestStatus
   label: string
 }> = [
-  { value: 'pending', label: 'Menunggu Persetujuan' },
+  { value: 'pending', label: 'Menunggu' },
   { value: 'approved', label: 'Disetujui' },
   { value: 'in_progress', label: 'Dikerjakan' },
   { value: 'done', label: 'Selesai' },
 ]
 
+export const milestoneTemplateGroups: MilestoneTemplateGroup[] = [
+  {
+    project_type: 'ui_ux_design',
+    label: 'Template Design UI/UX',
+    description: 'Rekomendasi fase design dari discovery sampai handoff.',
+    milestones: [
+      {
+        title: 'Discovery & Requirement',
+        description: 'Memahami kebutuhan client, user, referensi, dan batasan produk.',
+        tasks: ['Brief client', 'Kumpulkan referensi', 'Susun user flow', 'Konfirmasi scope design'],
+      },
+      {
+        title: 'Wireframe',
+        description: 'Membuat struktur halaman sebelum masuk visual detail.',
+        tasks: ['Wireframe halaman utama', 'Wireframe halaman pendukung', 'Review alur dengan client'],
+      },
+      {
+        title: 'High Fidelity Design',
+        description: 'Membuat tampilan final sesuai brand dan kebutuhan produk.',
+        tasks: ['Design komponen utama', 'Design semua screen', 'Rapikan responsive state'],
+      },
+      {
+        title: 'Prototype & Handoff',
+        description: 'Menyiapkan prototype dan asset agar siap diteruskan ke development.',
+        tasks: ['Buat prototype', 'Review final client', 'Siapkan asset handoff', 'Dokumentasi design'],
+      },
+    ],
+  },
+  {
+    project_type: 'thesis',
+    label: 'Template Skripsi Bab 1-6',
+    description: 'Rekomendasi milestone naskah skripsi dari pendahuluan sampai finalisasi.',
+    milestones: [
+      {
+        title: 'Bab 1 - Pendahuluan',
+        description: 'Fondasi masalah, tujuan, manfaat, dan batasan penelitian.',
+        tasks: [
+          'Latar belakang',
+          'Rumusan masalah',
+          'Tujuan penelitian',
+          'Manfaat penelitian',
+          'Batasan masalah',
+        ],
+      },
+      {
+        title: 'Bab 2 - Landasan Teori',
+        description: 'Teori pendukung, penelitian terdahulu, dan kerangka berpikir.',
+        tasks: ['Teori utama', 'Penelitian terdahulu', 'Kerangka berpikir', 'Daftar pustaka awal'],
+      },
+      {
+        title: 'Bab 3 - Metodologi',
+        description: 'Metode, data, kebutuhan sistem, dan rancangan penelitian.',
+        tasks: ['Metode penelitian', 'Objek/data penelitian', 'Teknik pengumpulan data', 'Rancangan pengujian'],
+      },
+      {
+        title: 'Bab 4 - Analisis & Perancangan',
+        description: 'Analisis kebutuhan dan rancangan program/dokumen teknis.',
+        tasks: ['Analisis kebutuhan', 'Flow/UML', 'Rancangan database', 'Rancangan interface'],
+      },
+      {
+        title: 'Bab 5 - Implementasi & Pengujian',
+        description: 'Implementasi hasil kerja dan pengujian sistem/penelitian.',
+        tasks: ['Implementasi fitur', 'Screenshot hasil', 'Pengujian sistem', 'Pembahasan hasil'],
+      },
+      {
+        title: 'Bab 6 - Kesimpulan & Saran',
+        description: 'Penutup, kesimpulan, saran, dan finalisasi naskah.',
+        tasks: ['Kesimpulan', 'Saran', 'Rapikan format kampus', 'Cek daftar pustaka dan lampiran'],
+      },
+    ],
+  },
+  {
+    project_type: 'web_app',
+    label: 'Template Website/Aplikasi',
+    description: 'Rekomendasi fase produksi dari requirement sampai deploy.',
+    milestones: [
+      {
+        title: 'Requirement & Arsitektur',
+        description: 'Memastikan scope fitur, data, role user, dan keputusan teknis awal.',
+        tasks: ['Finalisasi fitur', 'Rancang database', 'Rancang flow user', 'Setup repo/project'],
+      },
+      {
+        title: 'UI & Frontend',
+        description: 'Membangun tampilan, komponen, dan interaksi utama.',
+        tasks: ['Layout utama', 'Komponen reusable', 'Responsive mobile', 'Integrasi state/form'],
+      },
+      {
+        title: 'Backend & Integrasi',
+        description: 'Membangun data flow, auth, API, dan integrasi service.',
+        tasks: ['Auth dan role', 'CRUD utama', 'Validasi data', 'Integrasi storage/API'],
+      },
+      {
+        title: 'Testing & Deploy',
+        description: 'Menutup bug, melakukan final review, dan deploy.',
+        tasks: ['Testing fitur utama', 'Fix bug prioritas', 'Deploy production', 'Dokumentasi akses'],
+      },
+    ],
+  },
+]
+
+export const handoverTemplateItems = [
+  'File final/source design atau dokumen kerja sudah diberikan',
+  'Repo/source code dan akses deployment sudah disiapkan',
+  'Credential, akun, dan environment penting sudah dicatat aman',
+  'Dokumentasi penggunaan singkat sudah dibuat',
+  'Backup final project sudah disimpan',
+  'Masa garansi/maintenance dan batas revisi sudah dikonfirmasi',
+]
+
 export function formatRupiah(num: number) {
-  return new Intl.NumberFormat('id-ID').format(num)
+  return new Intl.NumberFormat('id-ID').format(Math.round(num))
 }
 
 export function formatCompactRupiah(num: number) {
@@ -217,6 +355,7 @@ export function milestoneStatusLabel(status: string) {
 export function milestoneStatusClass(status: string) {
   if (status === 'done') return 'bg-emerald-50 text-emerald-700 ring-emerald-200'
   if (status === 'review') return 'bg-amber-50 text-amber-700 ring-amber-200'
+  if (status === 'revision') return 'bg-rose-50 text-rose-700 ring-rose-200'
   if (status === 'in_progress') return 'bg-sky-50 text-sky-700 ring-sky-200'
   return 'bg-slate-100 text-slate-600 ring-slate-200'
 }
@@ -225,31 +364,29 @@ export function projectTypeLabel(type?: string | null) {
   return projectTypeOptions.find((option) => option.value === type)?.label || 'Belum dikategorikan'
 }
 
+export function projectTypeValues(project?: Pick<Project, 'project_type' | 'project_types'> | null) {
+  const values = Array.isArray(project?.project_types)
+    ? project.project_types
+    : project?.project_type
+      ? [project.project_type]
+      : []
+
+  return values.filter((value): value is ProjectType =>
+    projectTypeOptions.some((option) => option.value === value)
+  )
+}
+
+export function projectTypeLabels(project?: Pick<Project, 'project_type' | 'project_types'> | null) {
+  const values = projectTypeValues(project)
+  if (values.length === 0) return ['Belum dikategorikan']
+  return values.map((value) => projectTypeLabel(value))
+}
+
 export function projectTypeClass(type?: string | null) {
   return (
     projectTypeOptions.find((option) => option.value === type)?.color ||
     'bg-slate-100 text-slate-600 ring-slate-200'
   )
-}
-
-export function projectPriorityLabel(priority?: string | null) {
-  return (
-    projectPriorityOptions.find((option) => option.value === priority)?.label || 'Normal'
-  )
-}
-
-export function projectPriorityClass(priority?: string | null) {
-  if (priority === 'urgent') return 'bg-red-50 text-red-700 ring-red-200'
-  if (priority === 'high') return 'bg-orange-50 text-orange-700 ring-orange-200'
-  if (priority === 'low') return 'bg-slate-100 text-slate-600 ring-slate-200'
-  return 'bg-blue-50 text-blue-700 ring-blue-200'
-}
-
-export function projectPriorityRank(priority?: string | null) {
-  if (priority === 'urgent') return 4
-  if (priority === 'high') return 3
-  if (priority === 'medium') return 2
-  return 1
 }
 
 export function changeRequestStatusLabel(status: string) {
@@ -272,24 +409,42 @@ export function projectFinancials(
     | Pick<Project, 'total_deal' | 'internal_cost' | 'created_by' | 'assigned_to'>
     | null
     | undefined,
-  changeRequests: ChangeRequest[] = []
+  changeRequests: ChangeRequest[] = [],
+  assignments: ProjectAssignment[] = []
 ) {
   const baseDeal = Number(project?.total_deal || 0)
-  const hasExternalAssignee = Boolean(
-    project?.assigned_to && project.assigned_to !== project.created_by
+  const externalAssignments = assignments.filter(
+    (assignment) =>
+      assignment.assigned_to &&
+      (!project?.created_by || assignment.assigned_to !== project.created_by)
   )
-  const baseCost = hasExternalAssignee ? Number(project?.internal_cost || 0) : 0
+  const hasAssignmentSplit = assignments.length > 0
+  const hasExternalAssignee = hasAssignmentSplit
+    ? externalAssignments.length > 0
+    : Boolean(project?.assigned_to && project.assigned_to !== project.created_by)
+  const baseCost = hasAssignmentSplit
+    ? externalAssignments.reduce(
+        (total, assignment) => total + Number(assignment.internal_fee || 0),
+        0
+      )
+    : hasExternalAssignee
+      ? Number(project?.internal_cost || 0)
+      : 0
   const activeChanges = changeRequests.filter(isActiveChangeRequest)
   const additionalDeal = activeChanges.reduce(
     (total, changeRequest) => total + Number(changeRequest.additional_deal || 0),
     0
   )
-  const additionalCost = hasExternalAssignee
-    ? activeChanges.reduce(
-        (total, changeRequest) => total + Number(changeRequest.additional_cost || 0),
-        0
-      )
-    : 0
+  const additionalCost = activeChanges.reduce((total, changeRequest) => {
+    if (!hasExternalAssignee) return total
+
+    if (hasAssignmentSplit && changeRequest.assignment_id) {
+      const assignment = assignments.find((item) => item.id === changeRequest.assignment_id)
+      if (!assignment?.assigned_to || assignment.assigned_to === project?.created_by) return total
+    }
+
+    return total + Number(changeRequest.additional_cost || 0)
+  }, 0)
   const totalDeal = baseDeal + additionalDeal
   const internalCost = baseCost + additionalCost
 
@@ -303,6 +458,58 @@ export function projectFinancials(
     profit: totalDeal - internalCost,
     hasExternalAssignee,
   }
+}
+
+export function projectAssignmentsForProject(assignments: ProjectAssignment[], projectId?: string) {
+  if (!projectId) return []
+  return assignments
+    .filter((assignment) => assignment.project_id === projectId)
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+}
+
+export function projectAssignmentLabel(assignment?: ProjectAssignment | null) {
+  if (!assignment) return 'Scope project'
+  return assignment.role_label?.trim() || projectTypeLabel(assignment.project_type)
+}
+
+export function isAssignmentExternal(
+  assignment: ProjectAssignment | null | undefined,
+  project: Pick<Project, 'created_by'> | null | undefined
+) {
+  return Boolean(
+    assignment?.assigned_to && (!project?.created_by || assignment.assigned_to !== project.created_by)
+  )
+}
+
+export function assignmentDealTotal(assignments: ProjectAssignment[]) {
+  return assignments.reduce((total, assignment) => total + Number(assignment.deal_amount || 0), 0)
+}
+
+export function assignmentExternalFeeTotal(
+  assignments: ProjectAssignment[],
+  project: Pick<Project, 'created_by'> | null | undefined
+) {
+  return assignments.reduce(
+    (total, assignment) =>
+      total + (isAssignmentExternal(assignment, project) ? Number(assignment.internal_fee || 0) : 0),
+    0
+  )
+}
+
+export function userProjectAssignments(assignments: ProjectAssignment[], userId: string) {
+  return assignments.filter((assignment) => assignment.assigned_to === userId)
+}
+
+export function isProjectContributor(
+  project: Pick<Project, 'assigned_to' | 'created_by'> | null | undefined,
+  assignments: ProjectAssignment[],
+  userId: string
+) {
+  return (
+    isProjectOwner(project, userId) ||
+    isProjectAssignee(project, userId) ||
+    assignments.some((assignment) => assignment.assigned_to === userId)
+  )
 }
 
 export function progressValue(completed: number, total: number) {
