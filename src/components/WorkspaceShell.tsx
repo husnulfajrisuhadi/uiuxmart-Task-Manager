@@ -5,13 +5,13 @@ import { usePathname } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 
-import { Badge, Button, IconTile, Input } from '@/components/ui'
+import { Badge, Button, Icon, IconTile, Input, type IconName } from '@/components/ui'
 import { cn } from '@/lib/cn'
 
 type NavItem = {
   href: string
   label: string
-  icon: string
+  icon: IconName
   group: 'Command Center' | 'Delivery' | 'Finance' | 'People' | 'System'
   description: string
 }
@@ -20,49 +20,49 @@ export const navItems: NavItem[] = [
   {
     href: '/',
     label: 'Dashboard',
-    icon: '⌘',
+    icon: 'layout',
     group: 'Command Center',
     description: 'Overview bisnis',
   },
   {
     href: '/projects',
     label: 'Projects',
-    icon: '□',
+    icon: 'briefcase',
     group: 'Command Center',
     description: 'Deal dan project',
   },
   {
     href: '/deadlines',
     label: 'Deadlines',
-    icon: '◷',
+    icon: 'calendar',
     group: 'Delivery',
     description: 'Kalender kerja',
   },
   {
     href: '/scopes',
     label: 'Tambahan Scope',
-    icon: '+',
+    icon: 'plus',
     group: 'Delivery',
     description: 'Fitur/revisi berbayar',
   },
   {
     href: '/cashflow',
     label: 'Cashflow',
-    icon: '↗',
+    icon: 'circle-dollar',
     group: 'Finance',
     description: 'Revenue dan fee',
   },
   {
     href: '/team',
     label: 'Tim & Fee',
-    icon: '◎',
+    icon: 'team',
     group: 'People',
     description: 'Role freelancer',
   },
   {
     href: '/settings',
     label: 'Settings',
-    icon: '⚙',
+    icon: 'settings',
     group: 'System',
     description: 'Brand dan akun',
   },
@@ -196,7 +196,7 @@ export function WorkspaceShell({
                                 : 'bg-white text-slate-500 ring-1 ring-slate-200 group-hover:text-slate-950'
                             )}
                           >
-                            {item.icon}
+                            <Icon name={item.icon} />
                           </span>
                           {!collapsed && (
                             <span className="min-w-0">
@@ -270,9 +270,10 @@ export function WorkspaceShell({
 
                 {onSearchChange && (
                   <div className="relative lg:ml-auto lg:w-[380px]">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                      ⌕
-                    </span>
+                    <Icon
+                      name="search"
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
                     <Input
                       value={search || ''}
                       onChange={(event) => onSearchChange(event.target.value)}

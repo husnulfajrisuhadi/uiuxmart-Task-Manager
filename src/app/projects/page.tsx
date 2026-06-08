@@ -14,19 +14,30 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  Icon,
   Input,
+  MetricCard,
   Progress,
   Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
 } from '@/components/ui'
 import { supabase } from '@/lib/supabase'
 import {
   type ProjectType,
-  formatRupiah,
+  deadlineState,
+  formatCompactRupiah,
+  formatDateTime,
   isProjectOwner,
   projectTypeClass,
   projectTypeLabel,
   projectTypeOptions,
   projectTypeValues,
+  statusClass,
   statusLabel,
   userLabel,
 } from '@/lib/project-utils'
@@ -94,6 +105,32 @@ export default function ProjectsPage() {
       return matchesKeyword && matchesType && matchesStatus
     })
   }, [projects, search, statusFilter, typeFilter])
+
+  const projectSummary = useMemo(() => {
+    const totalDeal = projects.reduce(
+      (total, project) => total + (financialsByProject[project.id]?.totalDeal || 0),
+      0
+    )
+    const clientPaid = projects.reduce(
+      (total, project) => total + (paymentsByProject[project.id]?.client || 0),
+      0
+    )
+    const atRisk = projects.filter((project) => {
+      if (!project.deadline_at || project.status === 'done') return false
+      return deadlineState(project.deadline_at).tone !== 'neutral'
+    }).length
+
+    return {
+      total: projects.length,
+      active: projects.filter((project) => project.status !== 'done').length,
+      done: projects.filter((project) => project.status === 'done').length,
+      totalDeal,
+      clientPaid,
+      atRisk,
+    }
+  }, [financialsByProject, paymentsByProject, projects])
+
+  const activeFilters = Number(typeFilter !== 'all') + Number(statusFilter !== 'all') + Number(Boolean(search.trim()))
 
   function resetForm() {
     setName('')
@@ -269,48 +306,130 @@ export default function ProjectsPage() {
       action={
         <Button
           onClick={openModal}
-          className="fixed bottom-5 right-5 z-40 h-12 w-12 rounded-full p-0 text-xl shadow-2xl sm:static sm:h-10 sm:w-auto sm:rounded-md sm:px-4 sm:text-sm sm:shadow"
+          className="fixed bottom-5 right-5 z-40 h-12 w-12 rounded-full p-0 shadow-2xl sm:static sm:h-9 sm:w-auto sm:rounded-lg sm:px-4 sm:shadow-sm"
           aria-label="Tambah project"
         >
-          <span className="sm:hidden">+</span>
-          <span className="hidden sm:inline">Add Project +</span>
+          <Icon name="plus" className="sm:hidden" />
+          <span className="hidden sm:inline-flex items-center gap-2">
+            <Icon name="plus" />
+            Add Project
+          </span>
         </Button>
       }
     >
-      <Card>
-        <CardHeader className="flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <CardTitle>Project List</CardTitle>
-            <CardDescription>{filteredProjects.length} project sesuai filter</CardDescription>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="Total Project"
+          value={projectSummary.total}
+          icon={<Icon name="briefcase" />}
+          helper={`${projectSummary.active} aktif, ${projectSummary.done} selesai`}
+        />
+        <MetricCard
+          label="Total Deal"
+          value={`Rp ${formatCompactRupiah(projectSummary.totalDeal)}`}
+          icon={<Icon name="circle-dollar" />}
+          tone="emerald"
+          helper="Nilai deal project yang terlihat"
+        />
+        <MetricCard
+          label="Client Paid"
+          value={`Rp ${formatCompactRupiah(projectSummary.clientPaid)}`}
+          icon={<Icon name="arrow-down" />}
+          tone="sky"
+          helper="Payment client yang sudah tercatat"
+        />
+        <MetricCard
+          label="Deadline Risk"
+          value={projectSummary.atRisk}
+          icon={<Icon name="target" />}
+          tone="amber"
+          helper="Deadline dekat atau terlambat"
+        />
+      </section>
+
+      <Card className="mt-6 overflow-hidden">
+        <CardHeader className="border-b border-slate-200/80 bg-white pb-4">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <CardTitle>Project Database</CardTitle>
+              <CardDescription>
+                {filteredProjects.length} dari {projects.length} project ditampilkan
+              </CardDescription>
+            </div>
+
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+              <div className="grid gap-2 sm:grid-cols-2 lg:w-[460px]">
+                <Select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as 'all' | ProjectType)}>
+                  <option value="all">Semua tipe</option>
+                  {projectTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </Select>
+                <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                  <option value="all">Semua status</option>
+                  <option value="ongoing">Ongoing</option>
+                  <option value="review">Review</option>
+                  <option value="revision">Revisi</option>
+                  <option value="done">Selesai</option>
+                </Select>
+              </div>
+              {activeFilters > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setSearch('')
+                    setTypeFilter('all')
+                    setStatusFilter('all')
+                  }}
+                >
+                  Reset Filter
+                </Button>
+              )}
+            </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <Select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as 'all' | ProjectType)}>
-              <option value="all">Semua tipe</option>
-              {projectTypeOptions.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </Select>
-            <Select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-              <option value="all">Semua status</option>
-              <option value="ongoing">Ongoing</option>
-              <option value="review">Review</option>
-              <option value="revision">Revisi</option>
-              <option value="done">Selesai</option>
-            </Select>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {[
+              ['all', 'Semua'],
+              ['ongoing', 'Ongoing'],
+              ['review', 'Review'],
+              ['revision', 'Revisi'],
+              ['done', 'Selesai'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setStatusFilter(value)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  statusFilter === value
+                    ? 'bg-slate-950 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-950'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {filteredProjects.length === 0 ? (
-            <EmptyState title="Tidak ada project" description="Coba ubah filter atau tambah project baru." />
+            <div className="p-6">
+              <EmptyState title="Tidak ada project" description="Coba ubah filter atau tambah project baru." />
+            </div>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-slate-200">
-              <div className="hidden grid-cols-[1.4fr_1fr_160px_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
-                <span>Project</span>
-                <span>Tipe</span>
-                <span>Status</span>
-                <span className="text-right">Progress</span>
-              </div>
-              <div className="divide-y divide-slate-100">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
+                  <TableHead className="min-w-[280px]">Project</TableHead>
+                  <TableHead className="min-w-[180px]">Tipe</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="min-w-[160px]">Deadline</TableHead>
+                  <TableHead className="min-w-[180px] text-right">Progress</TableHead>
+                  <TableHead className="min-w-[160px] text-right">Financial</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {filteredProjects.map((project) => {
                   const financials = financialsByProject[project.id]
                   const progress = taskProgressByProject[project.id]?.percentage || 0
@@ -318,40 +437,78 @@ export default function ProjectsPage() {
                   const paid = isProjectOwner(project, currentUserId)
                     ? payments?.client || 0
                     : payments?.freelancer || 0
+                  const deadline = deadlineState(project.deadline_at)
 
                   return (
-                    <Link
-                      key={project.id}
-                      href={`/project/${project.id}`}
-                      className="grid grid-cols-1 gap-3 px-4 py-4 transition hover:bg-slate-50 lg:grid-cols-[1.4fr_1fr_160px_180px] lg:items-center"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate font-semibold text-slate-950">{project.name}</p>
-                        <p className="mt-1 text-sm text-slate-500">{project.client}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {projectTypeValues(project).map((type) => (
-                          <span key={type} className={`rounded-md px-2 py-1 text-xs font-semibold ring-1 ${projectTypeClass(type)}`}>
-                            {projectTypeLabel(type)}
-                          </span>
-                        ))}
-                      </div>
-                      <Badge variant="outline">{statusLabel(project.status)}</Badge>
-                      <div>
-                        <div className="mb-1 flex justify-between text-xs text-slate-500">
-                          <span>Rp {formatRupiah(paid)}</span>
-                          <span>{Math.round(progress)}%</span>
+                    <TableRow key={project.id}>
+                      <TableCell>
+                        <Link href={`/project/${project.id}`} className="group block min-w-0">
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-600 ring-1 ring-slate-200 transition group-hover:bg-slate-950 group-hover:text-white">
+                              <Icon name="briefcase" />
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block truncate font-semibold text-slate-950 group-hover:underline">
+                                {project.name}
+                              </span>
+                              <span className="mt-0.5 block truncate text-sm text-slate-500">
+                                {project.client}
+                              </span>
+                            </span>
+                          </div>
+                        </Link>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1.5">
+                          {projectTypeValues(project).map((type) => (
+                            <span key={type} className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${projectTypeClass(type)}`}>
+                              {projectTypeLabel(type)}
+                            </span>
+                          ))}
                         </div>
-                        <Progress value={progress} />
-                        <p className="mt-1 text-right text-xs text-slate-400">
-                          Deal Rp {formatRupiah(financials.totalDeal)}
+                      </TableCell>
+                      <TableCell>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusClass(project.status)}`}>
+                          {statusLabel(project.status)}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <Badge
+                            variant={
+                              deadline.tone === 'danger'
+                                ? 'danger'
+                                : deadline.tone === 'warning'
+                                  ? 'warning'
+                                  : 'secondary'
+                            }
+                            dot
+                          >
+                            {deadline.label}
+                          </Badge>
+                          <p className="text-xs text-slate-400">{formatDateTime(project.deadline_at)}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="ml-auto w-40">
+                          <div className="mb-1 flex justify-between text-xs text-slate-500">
+                            <span>Task</span>
+                            <span>{Math.round(progress)}%</span>
+                          </div>
+                          <Progress value={progress} />
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <p className="font-semibold text-slate-950">Rp {formatCompactRupiah(paid)}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          dari Rp {formatCompactRupiah(financials.totalDeal)}
                         </p>
-                      </div>
-                    </Link>
+                      </TableCell>
+                    </TableRow>
                   )
                 })}
-              </div>
-            </div>
+              </TableBody>
+            </Table>
           )}
         </CardContent>
       </Card>
